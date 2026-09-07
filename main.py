@@ -1,10 +1,11 @@
 import json
 import os
+import secrets
 from typing import Any
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
-from fastapi import FastAPI, HTTPException, Query
 
 OZON_API_BASE = "https://api-seller.ozon.ru"
 
@@ -13,6 +14,29 @@ app = FastAPI(
     description="ChatGPT Ozon Seller API integration service",
     version="1.0.0",
 )
+
+
+def require_action_token(
+    authorization: str | None = Header(default=None),
+) -> None:
+    expected_token = os.getenv("CHATGPT_ACTIONS_TOKEN")
+
+    if not expected_token:
+        raise HTTPException(
+            status_code=500,
+            detail="ChatGPT Actions token is not configured on the server.",
+        )
+
+    expected_header = f"Bearer {expected_token}"
+
+    if not authorization or not secrets.compare_digest(
+        authorization, expected_header
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def ozon_post(path: str, payload: dict[str, Any]) -> Any:
@@ -73,7 +97,11 @@ def health():
     return {"status": "healthy"}
 
 
-@app.get("/ozon/config-status", tags=["Ozon"])
+@app.get(
+    "/ozon/config-status",
+    tags=["Ozon"],
+    dependencies=[Depends(require_action_token)],
+)
 def config_status():
     return {
         "client_id_configured": bool(os.getenv("OZON_CLIENT_ID")),
@@ -81,12 +109,20 @@ def config_status():
     }
 
 
-@app.get("/ozon/seller-info", tags=["Ozon"])
+@app.get(
+    "/ozon/seller-info",
+    tags=["Ozon"],
+    dependencies=[Depends(require_action_token)],
+)
 def seller_info():
     return ozon_post("/v1/seller/info", {})
 
 
-@app.get("/ozon/products", tags=["Ozon"])
+@app.get(
+    "/ozon/products",
+    tags=["Ozon"],
+    dependencies=[Depends(require_action_token)],
+)
 def products(
     limit: int = Query(default=20, ge=1, le=100),
     last_id: str = Query(default=""),
