@@ -3,11 +3,13 @@ import os
 import secrets
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 OZON_API_BASE = "https://api-seller.ozon.ru"
+bearer_scheme = HTTPBearer(auto_error=False)
 
 app = FastAPI(
     title="Ozon ChatGPT API",
@@ -17,7 +19,7 @@ app = FastAPI(
 
 
 def require_action_token(
-    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
 ) -> None:
     expected_token = os.getenv("CHATGPT_ACTIONS_TOKEN")
 
@@ -27,11 +29,14 @@ def require_action_token(
             detail="ChatGPT Actions token is not configured on the server.",
         )
 
-    expected_header = f"Bearer {expected_token}"
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    if not authorization or not secrets.compare_digest(
-        authorization, expected_header
-    ):
+    if not secrets.compare_digest(credentials.credentials, expected_token):
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing access token.",
