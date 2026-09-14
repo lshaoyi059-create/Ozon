@@ -154,12 +154,11 @@ def products(
         return product_result
 
     product_ids = [
-        str(item["product_id"])
+        int(item["product_id"])
         for item in items
         if item.get("product_id")
     ]
 
-    # 获取商品详细信息
     info_result = ozon_post(
         "/v3/product/info/list",
         {
@@ -175,7 +174,6 @@ def products(
         for item in info_items
     }
 
-    # 获取库存信息
     try:
         stock_result = ozon_post(
             "/v3/product/info/stocks",
@@ -191,6 +189,7 @@ def products(
 
         stock_data = stock_result.get("result", stock_result)
         stock_items = stock_data.get("items", [])
+
     except HTTPException:
         stock_items = []
 
@@ -199,58 +198,73 @@ def products(
         for item in stock_items
     }
 
-    # 合并商品详情和库存
     for item in items:
         product_id = str(item.get("product_id"))
 
         detail = info_map.get(product_id, {})
         stock = stock_map.get(product_id, {})
+        stocks = stock.get("stocks", [])
+
+        fbo_present = 0
+        fbo_reserved = 0
+        fbs_present = 0
+        fbs_reserved = 0
+        warehouse_stocks = []
+
+        for stock_item in stocks:
+            stock_type = str(
+                stock_item.get("type", "")
+            ).lower()
+
+            present = int(
+                stock_item.get("present", 0) or 0
+            )
+            reserved = int(
+                stock_item.get("reserved", 0) or 0
+            )
+
+            warehouse_stocks.append(
+                {
+                    "warehouse_id": stock_item.get(
+                        "warehouse_id"
+                    ),
+                    "warehouse_name": stock_item.get(
+                        "warehouse_name"
+                    ),
+                    "type": stock_item.get("type"),
+                    "present": present,
+                    "reserved": reserved,
+                }
+            )
+
+            if stock_type == "fbo":
+                fbo_present += present
+                fbo_reserved += reserved
+
+            if stock_type in ("fbs", "rfbs"):
+                fbs_present += present
+                fbs_reserved += reserved
 
         item["name"] = detail.get("name")
         item["barcode"] = detail.get("barcode")
         item["category_id"] = detail.get("category_id")
-        item["primary_image"] = detail.get("primary_image")
+        item["primary_image"] = detail.get(
+            "primary_image"
+        )
 
-        stocks = stock.get("stocks", [])
+        item["fbo_stock_present"] = fbo_present
+        item["fbo_stock_reserved"] = fbo_reserved
+        item["fbs_stock_present"] = fbs_present
+        item["fbs_stock_reserved"] = fbs_reserved
 
-fbo_present = 0
-fbo_reserved = 0
-fbs_present = 0
-fbs_reserved = 0
-warehouse_stocks = []
+        item["stock_present"] = (
+            fbo_present + fbs_present
+        )
+        item["stock_reserved"] = (
+            fbo_reserved + fbs_reserved
+        )
+        item["warehouse_stocks"] = warehouse_stocks
 
-for stock_item in stocks:
-    stock_type = str(stock_item.get("type", "")).lower()
-
-    present = int(stock_item.get("present", 0) or 0)
-    reserved = int(stock_item.get("reserved", 0) or 0)
-
-    warehouse_stocks.append(
-        {
-            "warehouse_id": stock_item.get("warehouse_id"),
-            "warehouse_name": stock_item.get("warehouse_name"),
-            "type": stock_item.get("type"),
-            "present": present,
-            "reserved": reserved,
-        }
-    )
-
-    if stock_type == "fbo":
-        fbo_present += present
-        fbo_reserved += reserved
-
-    elif stock_type in ("fbs", "rfbs"):
-        fbs_present += present
-        fbs_reserved += reserved
-
-item["fbo_stock_present"] = fbo_present
-item["fbo_stock_reserved"] = fbo_reserved
-item["fbs_stock_present"] = fbs_present
-item["fbs_stock_reserved"] = fbs_reserved
-
-item["stock_present"] = fbo_present + fbs_present
-item["stock_reserved"] = fbo_reserved + fbs_reserved
-item["warehouse_stocks"] = warehouse_stocks
     result_data["items"] = items
     product_result["result"] = result_data
 
