@@ -15,6 +15,11 @@ app = FastAPI(
     title="Ozon ChatGPT API",
     description="ChatGPT Ozon Seller API integration service",
     version="1.0.0",
+    servers=[
+        {
+            "url": "https://ozon-chatgpt-x0xb.onrender.com"
+        }
+    ],
 )
 
 
