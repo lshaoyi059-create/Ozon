@@ -145,4 +145,85 @@ def products(
         "limit": limit,
     }
 
-    return ozon_post("/v3/product/list", payload)
+    product_result = ozon_post("/v3/product/list", payload)
+
+    result_data = product_result.get("result", product_result)
+    items = result_data.get("items", [])
+
+    if not items:
+        return product_result
+
+    product_ids = [
+        str(item["product_id"])
+        for item in items
+        if item.get("product_id")
+    ]
+
+    # 获取商品详细信息
+    info_result = ozon_post(
+        "/v3/product/info/list",
+        {
+            "product_id": product_ids,
+        },
+    )
+
+    info_data = info_result.get("result", info_result)
+    info_items = info_data.get("items", [])
+
+    info_map = {
+        str(item.get("id", item.get("product_id"))): item
+        for item in info_items
+    }
+
+    # 获取库存信息
+    try:
+        stock_result = ozon_post(
+            "/v3/product/info/stocks",
+            {
+                "filter": {
+                    "product_id": product_ids,
+                    "visibility": "ALL",
+                },
+                "cursor": "",
+                "limit": len(product_ids),
+            },
+        )
+
+        stock_data = stock_result.get("result", stock_result)
+        stock_items = stock_data.get("items", [])
+    except HTTPException:
+        stock_items = []
+
+    stock_map = {
+        str(item.get("product_id")): item
+        for item in stock_items
+    }
+
+    # 合并商品详情和库存
+    for item in items:
+        product_id = str(item.get("product_id"))
+
+        detail = info_map.get(product_id, {})
+        stock = stock_map.get(product_id, {})
+
+        item["name"] = detail.get("name")
+        item["barcode"] = detail.get("barcode")
+        item["category_id"] = detail.get("category_id")
+        item["primary_image"] = detail.get("primary_image")
+
+        stocks = stock.get("stocks", [])
+
+        item["stock_present"] = sum(
+            int(stock_item.get("present", 0) or 0)
+            for stock_item in stocks
+        )
+
+        item["stock_reserved"] = sum(
+            int(stock_item.get("reserved", 0) or 0)
+            for stock_item in stocks
+        )
+
+    result_data["items"] = items
+    product_result["result"] = result_data
+
+    return product_result
