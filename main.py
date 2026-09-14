@@ -213,16 +213,44 @@ def products(
 
         stocks = stock.get("stocks", [])
 
-        item["stock_present"] = sum(
-            int(stock_item.get("present", 0) or 0)
-            for stock_item in stocks
-        )
+fbo_present = 0
+fbo_reserved = 0
+fbs_present = 0
+fbs_reserved = 0
+warehouse_stocks = []
 
-        item["stock_reserved"] = sum(
-            int(stock_item.get("reserved", 0) or 0)
-            for stock_item in stocks
-        )
+for stock_item in stocks:
+    stock_type = str(stock_item.get("type", "")).lower()
 
+    present = int(stock_item.get("present", 0) or 0)
+    reserved = int(stock_item.get("reserved", 0) or 0)
+
+    warehouse_stocks.append(
+        {
+            "warehouse_id": stock_item.get("warehouse_id"),
+            "warehouse_name": stock_item.get("warehouse_name"),
+            "type": stock_item.get("type"),
+            "present": present,
+            "reserved": reserved,
+        }
+    )
+
+    if stock_type == "fbo":
+        fbo_present += present
+        fbo_reserved += reserved
+
+    elif stock_type in ("fbs", "rfbs"):
+        fbs_present += present
+        fbs_reserved += reserved
+
+item["fbo_stock_present"] = fbo_present
+item["fbo_stock_reserved"] = fbo_reserved
+item["fbs_stock_present"] = fbs_present
+item["fbs_stock_reserved"] = fbs_reserved
+
+item["stock_present"] = fbo_present + fbs_present
+item["stock_reserved"] = fbo_reserved + fbs_reserved
+item["warehouse_stocks"] = warehouse_stocks
     result_data["items"] = items
     product_result["result"] = result_data
 
