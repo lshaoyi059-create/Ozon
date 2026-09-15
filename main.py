@@ -75,16 +75,28 @@ def ozon_post(path: str, payload: dict[str, Any]) -> Any:
             body = response.read().decode("utf-8")
             return json.loads(body) if body else {}
 
-  except HTTPError as exc:
-    error_body = exc.read().decode("utf-8", errors="replace")
-    raise HTTPException(
-        status_code=502,
-        detail={
-            "ozon_path": path,
-            "ozon_http_status": exc.code,
-            "ozon_error": error_body[:500],
-        },
-    ) from exc
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ozon_path": path,
+                "ozon_http_status": exc.code,
+                "ozon_error": error_body[:500],
+            },
+        ) from exc
+
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to Ozon API.",
+        ) from exc
+
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ozon returned an invalid JSON response.",
+        ) from exc
 
     except (URLError, TimeoutError) as exc:
         raise HTTPException(
