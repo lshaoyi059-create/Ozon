@@ -138,15 +138,12 @@ def products(
     last_id: str = Query(default=""),
 ):
     payload = {
-        "filter": {
-            "visibility": "ALL",
-        },
+        "filter": {"visibility": "ALL"},
         "last_id": last_id,
         "limit": limit,
     }
 
     product_result = ozon_post("/v3/product/list", payload)
-
     result_data = product_result.get("result", product_result)
     items = result_data.get("items", [])
 
@@ -159,13 +156,16 @@ def products(
         if item.get("product_id")
     ]
 
+    skus = [
+        int(item["sku"])
+        for item in items
+        if item.get("sku")
+    ]
+
     info_result = ozon_post(
         "/v3/product/info/list",
-        {
-            "product_id": product_ids,
-        },
+        {"product_id": product_ids},
     )
-
     info_data = info_result.get("result", info_result)
     info_items = info_data.get("items", [])
 
@@ -174,97 +174,128 @@ def products(
         for item in info_items
     }
 
-    try:
-        stock_result = ozon_post(
-            "/v3/product/info/stocks",
-            {
-                "filter": {
-                    "product_id": product_ids,
-                    "visibility": "ALL",
-                },
-                "cursor": "",
-                "limit": len(product_ids),
+    # 读取 FBO/FBS 分类库存；此接口若没有返回仓库明细，不把缺失值冒充为 0。
+    stock_result = ozon_post(
+        "/v3/product/info/stocks",
+        {
+            "filter": {
+                "product_id": product_ids,
+                "visibility": "ALL",
             },
-        )
-
-        stock_data = stock_result.get("result", stock_result)
-        stock_items = stock_data.get("items", [])
-
-    except HTTPException:
-        stock_items = []
+            "cursor": "",
+            "limit": len(product_ids),
+        },
+    )
+    stock_data = stock_result.get("result", stock_result)
+    stock_items = stock_data.get("items", [])
 
     stock_map = {
         str(item.get("product_id")): item
         for item in stock_items
     }
 
+    # 单独读取 FBS 卖家仓库库存。
+    fbs_result = ozon_post(
+        "/v2/product/info/stocks-by-warehouse/fbs",
+        {"sku": skus},
+    )
+    fbs_data = fbs_result.get("result", fbs_result)
+
+    if isinstance(fbs_data, list):
+        fbs_items = fbs_data
+    else:
+        fbs_items = fbs_data.get("items", [])
+
+    fbs_map = {}
+    for fbs_item in fbs_items:
+        sku_key = str(fbs_item.get("sku", ""))
+        if sku_key:
+            fbs_map.setdefault(sku_key, []).append(fbs_item)
+
     for item in items:
-        product_id = str(item.get("product_id"))
+        product_id = str(item.get("product_id", ""))
+        sku_key = str(item.get("sku", ""))
 
         detail = info_map.get(product_id, {})
         stock = stock_map.get(product_id, {})
-        stocks = stock.get("stocks", [])
+        v3_stocks = stock.get("stocks", [])
 
         fbo_present = 0
         fbo_reserved = 0
-        fbs_present = 0
-        fbs_reserved = 0
+        fbo_found = False
         warehouse_stocks = []
 
-        for stock_item in stocks:
-            stock_type = str(
-                stock_item.get("type", "")
-            ).lower()
-
-            present = int(
-                stock_item.get("present", 0) or 0
+        for stock_item in v3_stocks:
+            stock_type = str(stock_item.get("type", "")).lower()
+            present_value = stock_item.get(
+                "present",
+                stock_item.get("stock"),
             )
-            reserved = int(
-                stock_item.get("reserved", 0) or 0
-            )
-
-            warehouse_stocks.append(
-                {
-                    "warehouse_id": stock_item.get(
-                        "warehouse_id"
-                    ),
-                    "warehouse_name": stock_item.get(
-                        "warehouse_name"
-                    ),
-                    "type": stock_item.get("type"),
-                    "present": present,
-                    "reserved": reserved,
-                }
-            )
+            reserved_value = stock_item.get("reserved")
 
             if stock_type == "fbo":
-                fbo_present += present
-                fbo_reserved += reserved
+                fbo_found = True
+                fbo_present += int(present_value or 0)
+                fbo_reserved += int(reserved_value or 0)
 
-            if stock_type in ("fbs", "rfbs"):
+        fbs_present = 0
+        fbs_reserved = 0
+        fbs_found = False
+
+        for fbs_item in fbs_map.get(sku_key, []):
+            # 有些响应直接给仓库字段，有些把仓库记录放在 stocks 数组中。
+            nested_stocks = fbs_item.get("stocks")
+            rows = nested_stocks if isinstance(nested_stocks, list) else [fbs_item]
+
+            for row in rows:
+                present_value = row.get(
+                    "present",
+                    row.get("stock"),
+                )
+                reserved_value = row.get("reserved")
+
+                if present_value is None and reserved_value is None:
+                    continue
+
+                fbs_found = True
+                present = int(present_value or 0)
+                reserved = int(reserved_value or 0)
+
                 fbs_present += present
                 fbs_reserved += reserved
+
+                warehouse_stocks.append(
+                    {
+                        "warehouse_id": row.get("warehouse_id"),
+                        "warehouse_name": row.get("warehouse_name"),
+                        "type": "FBS",
+                        "present": present,
+                        "reserved": reserved,
+                    }
+                )
 
         item["name"] = detail.get("name")
         item["barcode"] = detail.get("barcode")
         item["category_id"] = detail.get("category_id")
-        item["primary_image"] = detail.get(
-            "primary_image"
-        )
+        item["primary_image"] = detail.get("primary_image")
 
-        item["fbo_stock_present"] = fbo_present
-        item["fbo_stock_reserved"] = fbo_reserved
-        item["fbs_stock_present"] = fbs_present
-        item["fbs_stock_reserved"] = fbs_reserved
-
-        item["stock_present"] = (
-            fbo_present + fbs_present
-        )
-        item["stock_reserved"] = (
-            fbo_reserved + fbs_reserved
-        )
+        item["fbo_stock_present"] = fbo_present if fbo_found else None
+        item["fbo_stock_reserved"] = fbo_reserved if fbo_found else None
+        item["fbs_stock_present"] = fbs_present if fbs_found else None
+        item["fbs_stock_reserved"] = fbs_reserved if fbs_found else None
         item["warehouse_stocks"] = warehouse_stocks
 
+        # 只有 FBO、FBS 两边都实际返回数据，才给出总数。
+        if fbo_found and fbs_found:
+            item["stock_present"] = fbo_present + fbs_present
+            item["stock_reserved"] = fbo_reserved + fbs_reserved
+        else:
+            item["stock_present"] = None
+            item["stock_reserved"] = None
+
+    result_data["items"] = items
+    product_result["result"] = result_data
+    return product_result
     result_data["items"] = items
     product_result["result"] = result_data
 
